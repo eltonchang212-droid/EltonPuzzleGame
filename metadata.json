@@ -1,0 +1,5 @@
+{
+  "name": "Jigsaw Puzzle World",
+  "description": "A versatile puzzle game application where you can play with built-in landmark images or upload your own. Choose between a traditional jigsaw mode with customizable difficulty and irregular pieces, or a classic sliding puzzle. Features an optional timer and multi-language support.",
+  "requestFramePermissions": []
+}
