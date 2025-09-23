@@ -1,0 +1,574 @@
+import sys
+import os
+import random
+from PyQt5.QtWidgets import (
+    QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
+    QFileDialog, QComboBox, QMessageBox, QGridLayout, QStackedWidget, QFrame, QCheckBox
+)
+from PyQt5.QtGui import QPixmap, QImage, QPainter, QColor, QFont
+from PyQt5.QtCore import Qt, QTimer, QPoint
+
+# 內建地標圖片清單 (假設圖片已放在 landmarks 資料夾)
+LANDMARKS = [
+    ("台北101", "landmarks/taipei101.jpg"),
+    ("雪梨歌劇院", "landmarks/sydney_opera.jpg"),
+    ("巴黎鐵塔", "landmarks/eiffel.jpg"),
+    ("紐約自由女神", "landmarks/statue_of_liberty.jpg"),
+    ("倫敦大笨鐘", "landmarks/big_ben.jpg"),
+    ("東京晴空塔", "landmarks/tokyo_skytree.jpg"),
+    ("莫斯科紅場", "landmarks/red_square.jpg"),
+    ("羅馬競技場", "landmarks/colosseum.jpg"),
+    ("杜拜哈里發塔", "landmarks/burj_khalifa.jpg"),
+    ("新加坡濱海灣", "landmarks/marina_bay.jpg"),
+]
+
+LANGUAGES = {
+    "zh": {
+        "select_image": "選擇圖片",
+        "upload_image": "上傳圖片",
+        "select_mode": "選擇遊戲模式",
+        "classic_mode": "傳統拼圖",
+        "slide_mode": "拼圖板遊戲",
+        "select_grid": "選擇拼圖片數",
+        "start_game": "開始遊戲",
+        "timer": "計時器",
+        "pause": "暫停",
+        "resume": "繼續",
+        "congrats": "恭喜完成拼圖！",
+        "mismatch": "圖形不符，請重新選擇。",
+        "select_timer": "是否啟用計時器？",
+        "yes": "是",
+        "no": "否",
+        "lang_switch": "切換語言",
+        "close_pause": "請先關閉暫停才能繼續遊戲。",
+        "back": "返回",
+        "info_title": "提示",
+        "congrats_title": "恭喜",
+        "preview": "顯示預覽",
+        "image_error_title": "圖片錯誤",
+        "image_not_found": "找不到圖片檔案。",
+        "image_load_failed": "圖片載入失敗。"
+    },
+    "en": {
+        "select_image": "Select Image",
+        "upload_image": "Upload Image",
+        "select_mode": "Select Game Mode",
+        "classic_mode": "Classic Jigsaw",
+        "slide_mode": "Sliding Puzzle",
+        "select_grid": "Select Grid Size",
+        "start_game": "Start Game",
+        "timer": "Timer",
+        "pause": "Pause",
+        "resume": "Resume",
+        "congrats": "Congratulations! Puzzle Completed!",
+        "mismatch": "Piece does not match. Please try again.",
+        "select_timer": "Enable Timer?",
+        "yes": "Yes",
+        "no": "No",
+        "lang_switch": "Switch Language",
+        "close_pause": "Please close pause to continue.",
+        "back": "Back",
+        "info_title": "Info",
+        "congrats_title": "Congratulations",
+        "preview": "Show Preview",
+        "image_error_title": "Image Error",
+        "image_not_found": "Image not found.",
+        "image_load_failed": "Failed to load image."
+    }
+}
+
+class TimerWidget(QWidget):
+    def __init__(self, lang, parent=None):
+        super().__init__(parent)
+        self.lang = lang
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.update_time)
+        self.time = 0
+        self.paused = False
+
+        self.label = QLabel(self.format_time())
+        self.label.setFont(QFont("Arial", 16))
+        self.pause_btn = QPushButton(LANGUAGES[self.lang]["pause"])
+        self.pause_btn.clicked.connect(self.toggle_pause)
+
+        layout = QHBoxLayout()
+        layout.addWidget(QLabel(LANGUAGES[self.lang]["timer"] + ":"))
+        layout.addWidget(self.label)
+        layout.addWidget(self.pause_btn)
+        self.setLayout(layout)
+
+    def format_time(self):
+        m, s = divmod(self.time, 60)
+        return f"{m:02d}:{s:02d}"
+
+    def start(self):
+        self.time = 0
+        self.paused = False
+        self.pause_btn.setText(LANGUAGES[self.lang]["pause"])
+        self.timer.start(1000)
+        self.update_time()
+
+    def stop(self):
+        self.timer.stop()
+
+    def update_time(self):
+        if not self.paused:
+            self.time += 1
+            self.label.setText(self.format_time())
+
+    def toggle_pause(self):
+        if self.paused:
+            self.paused = False
+            self.pause_btn.setText(LANGUAGES[self.lang]["pause"])
+        else:
+            self.paused = True
+            self.pause_btn.setText(LANGUAGES[self.lang]["resume"])
+
+    def is_paused(self):
+        return self.paused
+
+    def set_language(self, lang):
+        self.lang = lang
+        self.pause_btn.setText(LANGUAGES[self.lang]["pause"] if not self.paused else LANGUAGES[self.lang]["resume"])
+        self.layout().itemAt(0).widget().setText(LANGUAGES[self.lang]["timer"] + ":")
+
+class LanguageSwitcher(QPushButton):
+    def __init__(self, callback, lang="zh"):
+        super().__init__(LANGUAGES[lang]["lang_switch"])
+        self.lang = lang
+        self.callback = callback
+        self.clicked.connect(self.switch_language)
+
+    def switch_language(self):
+        self.lang = "en" if self.lang == "zh" else "zh"
+        self.setText(LANGUAGES[self.lang]["lang_switch"])
+        self.callback(self.lang)
+
+class MainMenu(QWidget):
+    def __init__(self, start_callback, lang_callback, lang="zh"):
+        super().__init__()
+        self.lang = lang
+        self.start_callback = start_callback
+        self.lang_callback = lang_callback
+        self.selected_image = None
+        self.selected_image_path = None
+
+        self.image_combo = QComboBox()
+        for name, path in LANDMARKS:
+            self.image_combo.addItem(name, path)
+        self.upload_btn = QPushButton(LANGUAGES[self.lang]["upload_image"])
+        self.upload_btn.clicked.connect(self.upload_image)
+
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItem(LANGUAGES[self.lang]["classic_mode"], "classic")
+        self.mode_combo.addItem(LANGUAGES[self.lang]["slide_mode"], "slide")
+
+        self.grid_combo = QComboBox()
+        for n in range(3, 10):
+            self.grid_combo.addItem(f"{n} x {n}", n)
+
+        self.timer_checkbox = QCheckBox(LANGUAGES[self.lang]["select_timer"])
+        self.timer_checkbox.setChecked(True)
+
+        self.preview_checkbox = QCheckBox(LANGUAGES[self.lang]["preview"])
+        self.preview_checkbox.setChecked(False)
+
+        self.start_btn = QPushButton(LANGUAGES[self.lang]["start_game"])
+        self.start_btn.clicked.connect(self.start_game)
+
+        self.lang_btn = LanguageSwitcher(self.set_language, self.lang)
+
+        layout = QVBoxLayout()
+        layout.addWidget(QLabel(LANGUAGES[self.lang]["select_image"]))
+        layout.addWidget(self.image_combo)
+        layout.addWidget(self.upload_btn)
+        layout.addWidget(QLabel(LANGUAGES[self.lang]["select_mode"]))
+        layout.addWidget(self.mode_combo)
+        layout.addWidget(QLabel(LANGUAGES[self.lang]["select_grid"]))
+        layout.addWidget(self.grid_combo)
+        layout.addWidget(self.timer_checkbox)
+        layout.addWidget(self.preview_checkbox)
+        layout.addWidget(self.start_btn)
+        layout.addWidget(self.lang_btn)
+        self.setLayout(layout)
+
+    def upload_image(self):
+        fname, _ = QFileDialog.getOpenFileName(self, "Open Image", "", "Images (*.png *.jpg *.jpeg)")
+        if fname:
+            self.selected_image_path = fname
+            self.image_combo.addItem(os.path.basename(fname), fname)
+            self.image_combo.setCurrentIndex(self.image_combo.count() - 1)
+
+    def start_game(self):
+        img_path = self.image_combo.currentData()
+        mode = self.mode_combo.currentData()
+        grid_size = self.grid_combo.currentData()
+        use_timer = self.timer_checkbox.isChecked()
+        show_preview = self.preview_checkbox.isChecked()
+        # 驗證圖片
+        if not img_path or not os.path.exists(img_path):
+            QMessageBox.critical(self, LANGUAGES[self.lang]["image_error_title"], LANGUAGES[self.lang]["image_not_found"])
+            return
+        img = QImage(img_path)
+        if img.isNull() or img.width() <= 0 or img.height() <= 0:
+            QMessageBox.critical(self, LANGUAGES[self.lang]["image_error_title"], LANGUAGES[self.lang]["image_load_failed"])
+            return
+        self.start_callback(img_path, mode, grid_size, use_timer, show_preview)
+
+    def set_language(self, lang):
+        self.lang = lang
+        self.upload_btn.setText(LANGUAGES[self.lang]["upload_image"])
+        self.mode_combo.setItemText(0, LANGUAGES[self.lang]["classic_mode"])
+        self.mode_combo.setItemText(1, LANGUAGES[self.lang]["slide_mode"])
+        self.grid_combo.clear()
+        for n in range(3, 10):
+            self.grid_combo.addItem(f"{n} x {n}", n)
+        self.timer_checkbox.setText(LANGUAGES[self.lang]["select_timer"])
+        self.preview_checkbox.setText(LANGUAGES[self.lang]["preview"])
+        self.start_btn.setText(LANGUAGES[self.lang]["start_game"])
+        self.lang_btn.setText(LANGUAGES[self.lang]["lang_switch"])
+        self.layout().itemAt(0).widget().setText(LANGUAGES[self.lang]["select_image"])
+        self.layout().itemAt(3).widget().setText(LANGUAGES[self.lang]["select_mode"])
+        self.layout().itemAt(5).widget().setText(LANGUAGES[self.lang]["select_grid"])
+        self.lang_callback(lang)
+
+class PuzzlePiece(QLabel):
+    def __init__(self, pixmap, idx, parent=None):
+        super().__init__(parent)
+        self.setPixmap(pixmap)
+        self.idx = idx
+        self.setFrameStyle(QFrame.Panel | QFrame.Raised)
+        self.setLineWidth(2)
+        self.selected = False
+
+    def mousePressEvent(self, event):
+        self.selected = not self.selected
+        self.setStyleSheet("border: 2px solid red;" if self.selected else "")
+        self.parent().piece_selected(self)
+
+class ClassicPuzzle(QWidget):
+    def __init__(self, image_path, grid_size, lang, timer_widget, use_timer, show_preview, back_callback):
+        super().__init__()
+        self.lang = lang
+        self.grid_size = grid_size
+        self.image_path = image_path
+        self.timer_widget = timer_widget
+        self.use_timer = use_timer
+        self.show_preview = show_preview
+        self.back_callback = back_callback
+
+        self.selected_piece = None
+        self.pieces = []
+        self.board = [None] * (grid_size * grid_size)
+
+        self.init_ui()
+
+    def init_ui(self):
+        img = QImage(self.image_path)
+        w, h = img.width(), img.height()
+        min_side = min(w, h)
+        img = img.copy((w - min_side)//2, (h - min_side)//2, min_side, min_side)
+        img = img.scaled(400, 400, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        piece_size = img.width() // self.grid_size
+
+        # 切割圖片
+        self.pieces = []
+        for y in range(self.grid_size):
+            for x in range(self.grid_size):
+                piece = img.copy(x*piece_size, y*piece_size, piece_size, piece_size)
+                pix = QPixmap.fromImage(piece)
+                self.pieces.append((y*self.grid_size + x, pix))
+
+        # 打亂
+        random.shuffle(self.pieces)
+
+        # 拼圖區
+        self.board_grid = QGridLayout()
+        for i in range(self.grid_size):
+            for j in range(self.grid_size):
+                lbl = QLabel()
+                lbl.setFixedSize(piece_size, piece_size)
+                lbl.setStyleSheet("background: #eee; border: 1px solid #aaa;")
+                lbl.setAlignment(Qt.AlignCenter)
+                lbl.mousePressEvent = lambda e, idx=i*self.grid_size+j: self.board_clicked(idx)
+                self.board_grid.addWidget(lbl, i, j)
+
+        # 拼圖片區
+        self.piece_grid = QGridLayout()
+        for idx, (orig_idx, pix) in enumerate(self.pieces):
+            piece = PuzzlePiece(pix, orig_idx, self)
+            piece.setFixedSize(piece_size, piece_size)
+            self.piece_grid.addWidget(piece, idx // self.grid_size, idx % self.grid_size)
+
+        self.info_label = QLabel("")
+        self.back_btn = QPushButton(LANGUAGES[self.lang]["back"] + " ←")
+        self.back_btn.clicked.connect(self.back_callback)
+
+        # 預覽
+        self.preview_label = QLabel()
+        self.preview_label.setAlignment(Qt.AlignCenter)
+        self.preview_label.setPixmap(QPixmap.fromImage(img))
+        self.preview_label.setVisible(self.show_preview)
+
+        layout = QVBoxLayout()
+        top = QHBoxLayout()
+        top.addWidget(self.back_btn)
+        if self.use_timer:
+            top.addWidget(self.timer_widget)
+        layout.addLayout(top)
+        layout.addWidget(self.info_label)
+        layout.addLayout(self.board_grid)
+        layout.addLayout(self.piece_grid)
+        layout.addWidget(self.preview_label)
+        self.setLayout(layout)
+
+        if self.use_timer:
+            self.timer_widget.start()
+
+    def piece_selected(self, piece):
+        if self.selected_piece and self.selected_piece != piece:
+            self.selected_piece.setStyleSheet("")
+            self.selected_piece.selected = False
+        self.selected_piece = piece if piece.selected else None
+
+    def board_clicked(self, idx):
+        if self.use_timer and self.timer_widget.is_paused():
+            QMessageBox.information(self, "Info", LANGUAGES[self.lang]["close_pause"])
+            return
+        if self.selected_piece:
+            # 檢查是否正確
+            if self.selected_piece.idx == idx:
+                # 放上去
+                row, col = divmod(idx, self.grid_size)
+                lbl = self.board_grid.itemAtPosition(row, col).widget()
+                lbl.setPixmap(self.selected_piece.pixmap())
+                lbl.setStyleSheet("border: 2px solid green;")
+                self.selected_piece.hide()
+                self.board[idx] = self.selected_piece.idx
+                self.selected_piece = None
+                if all(self.board[i] == i for i in range(self.grid_size * self.grid_size)):
+                    if self.use_timer:
+                        self.timer_widget.stop()
+                    QMessageBox.information(self, "Congrats", LANGUAGES[self.lang]["congrats"])
+            else:
+                self.info_label.setText(LANGUAGES[self.lang]["mismatch"])
+        else:
+            # 取消貼上
+            row, col = divmod(idx, self.grid_size)
+            lbl = self.board_grid.itemAtPosition(row, col).widget()
+            lbl.clear()
+            lbl.setStyleSheet("background: #eee; border: 1px solid #aaa;")
+            self.board[idx] = None
+
+    def set_language(self, lang):
+        self.lang = lang
+        self.info_label.setText("")
+        self.back_btn.setText(LANGUAGES[self.lang]["back"] + " ←")
+        if self.use_timer:
+            self.timer_widget.set_language(lang)
+
+class SlidePuzzle(QWidget):
+    def __init__(self, image_path, grid_size, lang, timer_widget, use_timer, show_preview, back_callback):
+        super().__init__()
+        self.lang = lang
+        self.grid_size = grid_size
+        self.image_path = image_path
+        self.timer_widget = timer_widget
+        self.use_timer = use_timer
+        self.show_preview = show_preview
+        self.back_callback = back_callback
+
+        self.tiles = []
+        self.empty_pos = (grid_size-1, grid_size-1)
+        self.init_ui()
+
+    def init_ui(self):
+        img = QImage(self.image_path)
+        w, h = img.width(), img.height()
+        min_side = min(w, h)
+        img = img.copy((w - min_side)//2, (h - min_side)//2, min_side, min_side)
+        img = img.scaled(400, 400, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        piece_size = img.width() // self.grid_size
+
+        # 切割圖片
+        self.tiles = []
+        for y in range(self.grid_size):
+            row = []
+            for x in range(self.grid_size):
+                if (y, x) == (self.grid_size-1, self.grid_size-1):
+                    row.append(None)
+                else:
+                    piece = img.copy(x*piece_size, y*piece_size, piece_size, piece_size)
+                    pix = QPixmap.fromImage(piece)
+                    # 儲存原始索引與圖塊
+                    orig_idx = y * self.grid_size + x
+                    row.append((orig_idx, pix))
+            self.tiles.append(row)
+
+        # 打亂
+        self.shuffle_tiles()
+
+        self.grid = QGridLayout()
+        self.labels = [[None]*self.grid_size for _ in range(self.grid_size)]
+        for y in range(self.grid_size):
+            for x in range(self.grid_size):
+                lbl = QLabel()
+                lbl.setFixedSize(piece_size, piece_size)
+                lbl.setStyleSheet("background: #eee; border: 1px solid #aaa;")
+                lbl.setAlignment(Qt.AlignCenter)
+                if self.tiles[y][x]:
+                    lbl.setPixmap(self.tiles[y][x][1])
+                lbl.mousePressEvent = lambda e, pos=(y, x): self.tile_clicked(pos)
+                self.grid.addWidget(lbl, y, x)
+                self.labels[y][x] = lbl
+
+        self.info_label = QLabel("")
+        self.back_btn = QPushButton(LANGUAGES[self.lang]["back"] + " ←")
+        self.back_btn.clicked.connect(self.back_callback)
+
+        # 預覽
+        self.preview_label = QLabel()
+        self.preview_label.setAlignment(Qt.AlignCenter)
+        self.preview_label.setPixmap(QPixmap.fromImage(img))
+        self.preview_label.setVisible(self.show_preview)
+
+        layout = QVBoxLayout()
+        top = QHBoxLayout()
+        top.addWidget(self.back_btn)
+        if self.use_timer:
+            top.addWidget(self.timer_widget)
+        layout.addLayout(top)
+        layout.addWidget(self.info_label)
+        layout.addLayout(self.grid)
+        layout.addWidget(self.preview_label)
+        self.setLayout(layout)
+
+        if self.use_timer:
+            self.timer_widget.start()
+
+    def shuffle_tiles(self):
+        # 產生可解的隨機排列
+        arr = []
+        for y in range(self.grid_size):
+            for x in range(self.grid_size):
+                if (y, x) != (self.grid_size-1, self.grid_size-1):
+                    arr.append(self.tiles[y][x])
+        while True:
+            random.shuffle(arr)
+            tiles = []
+            idx = 0
+            for y in range(self.grid_size):
+                row = []
+                for x in range(self.grid_size):
+                    if (y, x) == (self.grid_size-1, self.grid_size-1):
+                        row.append(None)
+                    else:
+                        row.append(arr[idx])
+                        idx += 1
+                tiles.append(row)
+            if self.is_solvable(tiles):
+                self.tiles = tiles
+                self.empty_pos = (self.grid_size-1, self.grid_size-1)
+                break
+
+    def is_solvable(self, tiles):
+        # 判斷滑動拼圖是否可解
+        # 以原始索引計算倒置數
+        flat_indices = []
+        for row in tiles:
+            for t in row:
+                if t is not None:
+                    flat_indices.append(t[0])
+        inv = 0
+        for i in range(len(flat_indices)):
+            for j in range(i+1, len(flat_indices)):
+                if flat_indices[i] > flat_indices[j]:
+                    inv += 1
+        if self.grid_size % 2 == 1:
+            return inv % 2 == 0
+        else:
+            # 空白位於自底數來第1列（初始化在右下角）
+            empty_row_from_bottom = 1
+            return (inv + empty_row_from_bottom) % 2 == 0
+
+    def tile_clicked(self, pos):
+        if self.use_timer and self.timer_widget.is_paused():
+            QMessageBox.information(self, "Info", LANGUAGES[self.lang]["close_pause"])
+            return
+        y, x = pos
+        ey, ex = self.empty_pos
+        if (abs(ey - y) == 1 and ex == x) or (abs(ex - x) == 1 and ey == y):
+            # 交換
+            self.tiles[ey][ex], self.tiles[y][x] = self.tiles[y][x], self.tiles[ey][ex]
+            self.labels[ey][ex].setPixmap(self.tiles[ey][ex][1] if self.tiles[ey][ex] else QPixmap())
+            self.labels[y][x].setPixmap(self.tiles[y][x][1] if self.tiles[y][x] else QPixmap())
+            self.empty_pos = (y, x)
+            if self.check_win():
+                if self.use_timer:
+                    self.timer_widget.stop()
+                QMessageBox.information(self, "Congrats", LANGUAGES[self.lang]["congrats"])
+
+    def check_win(self):
+        for y in range(self.grid_size):
+            for x in range(self.grid_size):
+                if (y, x) == (self.grid_size-1, self.grid_size-1):
+                    if self.tiles[y][x] is not None:
+                        return False
+                else:
+                    tile = self.tiles[y][x]
+                    if tile is None:
+                        return False
+                    expected_idx = y * self.grid_size + x
+                    if tile[0] != expected_idx:
+                        return False
+        return True
+
+    def set_language(self, lang):
+        self.lang = lang
+        self.info_label.setText("")
+        self.back_btn.setText(LANGUAGES[self.lang]["back"] + " ←")
+        if self.use_timer:
+            self.timer_widget.set_language(lang)
+
+class PuzzleApp(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.lang = "zh"
+        self.setWindowTitle("拼圖遊戲 Puzzle Game")
+        self.stacked = QStackedWidget()
+        self.timer_widget = TimerWidget(self.lang)
+        self.main_menu = MainMenu(self.start_game, self.set_language, self.lang)
+        self.stacked.addWidget(self.main_menu)
+        self.setLayout(QVBoxLayout())
+        self.layout().addWidget(self.stacked)
+        self.resize(500, 700)
+
+    def start_game(self, img_path, mode, grid_size, use_timer, show_preview):
+        # 清除 timer
+        self.timer_widget = TimerWidget(self.lang)
+        if mode == "classic":
+            self.puzzle = ClassicPuzzle(img_path, grid_size, self.lang, self.timer_widget, use_timer, show_preview, self.back_to_menu)
+        else:
+            self.puzzle = SlidePuzzle(img_path, grid_size, self.lang, self.timer_widget, use_timer, show_preview, self.back_to_menu)
+        if self.stacked.count() > 1:
+            self.stacked.removeWidget(self.stacked.widget(1))
+        self.stacked.addWidget(self.puzzle)
+        self.stacked.setCurrentIndex(1)
+
+    def back_to_menu(self):
+        if self.stacked.count() > 1:
+            self.stacked.removeWidget(self.stacked.widget(1))
+        self.stacked.setCurrentIndex(0)
+
+    def set_language(self, lang):
+        self.lang = lang
+        self.setWindowTitle("拼圖遊戲 Puzzle Game" if lang == "zh" else "Puzzle Game")
+        self.main_menu.set_language(lang)
+        if hasattr(self, "puzzle"):
+            self.puzzle.set_language(lang)
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    window = PuzzleApp()
+    window.show()
+    sys.exit(app.exec_())
